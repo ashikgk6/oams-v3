@@ -16,7 +16,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault(
-            "Permissions-Policy", "camera=(self), microphone=(), geolocation=()"
+            "Permissions-Policy", "camera=(self), microphone=(), geolocation=(self)"
         )
         # HSTS only meaningful behind HTTPS; proxy should also set this.
         if request.url.scheme == "https":
