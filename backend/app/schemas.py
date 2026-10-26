@@ -1,7 +1,7 @@
 from datetime import date, datetime, time
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 
 from app.models import (
     AttendanceStatus,
@@ -21,14 +21,14 @@ class TokenOut(BaseModel):
 
 
 class LoginIn(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
 
 class UserOut(BaseModel):
     id: int
     name: str
-    email: EmailStr
+    email: str
     role: UserRole
     team_id: Optional[int] = None
     team_name: Optional[str] = None
@@ -39,7 +39,7 @@ class UserOut(BaseModel):
 
 class UserCreate(BaseModel):
     name: str
-    email: EmailStr
+    email: str
     password: str = "Welcome@123"
     role: UserRole = UserRole.employee
     team_id: Optional[int] = None
