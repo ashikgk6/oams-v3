@@ -239,40 +239,109 @@ async function renderPunch(app) {
       <div id="punchMsg" class="punch-result"></div>
       <div class="row" style="justify-content:center;margin-top:1rem">
         <button type="button" class="secondary" id="stopScan">Stop camera</button>
+        <button type="button" id="scanAgain" hidden>Scan again</button>
       </div>
     </div>`,
     "/punch"
   );
   bindLogout();
-  const msg = document.getElementById("punchMsg");
-  let busy = false;
 
-  async function onScan(decoded) {
-    if (busy) return;
-    busy = true;
-    msg.textContent = "QR scanned. Checking your location…";
+  const msg = document.getElementById("punchMsg");
+  const stopBtn = document.getElementById("stopScan");
+  const scanAgainBtn = document.getElementById("scanAgain");
+
+  let busy = false;
+  let scanActive = false;
+  let cameraId = null;
+
+   // Stop the camera before processing the scanned QR code.
+  async function stopScanner() {
+    if (!html5QrCode || !scanActive) {
+      return;
+    }
+
     try {
+      await html5QrCode.stop();
+    } finally {
+      scanActive = false;
+      stopBtn.disabled = true;
+    }
+  }
+
+  // Start scanning only when explicitly requested.
+  async function startScanner() {
+    if (!html5QrCode || !cameraId || scanActive) {
+      return;
+    }
+
+    try {
+      await html5QrCode.start(
+        cameraId,
+        { fps: 8, qrbox: { width: 250, height: 250 } },
+        onScan,
+        () => {}
+      );
+
+      scanActive = true;
+      stopBtn.disabled = false;
+      msg.className = "punch-result";
+      msg.textContent = "Ready to scan one QR code.";
+    } catch (error) {
+      scanActive = false;
+      throw error;
+    }
+  }
+
+   // Process one QR scan, then require the employee to scan again manually.
+  async function onScan(decoded) {
+    if (busy) {
+      return;
+    }
+
+    // Set the lock synchronously before awaiting anything.
+    busy = true;
+    stopBtn.disabled = true;
+    msg.className = "punch-result";
+    msg.textContent = "QR scanned. Stopping camera…";
+
+    try {
+      // Stop repeated QR detections before requesting location or sending
+      // the attendance request.
+      await stopScanner();
+
+      msg.textContent = "QR scanned. Checking your location…";
+
       if (!navigator.geolocation) {
-        throw new Error("This browser does not support location verification.");
+        throw new Error(
+          "This browser does not support location verification."
+        );
       }
+
       const position = await new Promise((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, {
           enableHighAccuracy: true,
           timeout: 15000,
           maximumAge: 0,
         });
-      }).catch((err) => {
-        if (err && typeof err.code === "number") {
+      }).catch((error) => {
+        if (error && typeof error.code === "number") {
           const messages = {
             1: "Location permission was denied. Allow location access and scan again.",
             2: "Your location is unavailable. Move to an area with better GPS reception and try again.",
             3: "Location request timed out. Please try again.",
           };
-          throw new Error(messages[err.code] || "Could not verify your location.");
+
+          throw new Error(
+            messages[error.code] || "Could not verify your location."
+          );
         }
-        throw err;
+
+        throw error;
       });
-      msg.textContent = "Location received. Verifying QR and office distance…";
+
+      msg.textContent =
+        "Location received. Verifying QR and office distance…";
+
       const data = await api("/api/punches", {
         method: "POST",
         body: JSON.stringify({
@@ -282,47 +351,105 @@ async function renderPunch(app) {
           accuracy_meters: position.coords.accuracy,
         }),
       });
-      msg.innerHTML = `<div class="success"><strong>${data.direction}</strong> · ${new Date(data.ts).toLocaleTimeString("en-IN")}<br/>${data.message}</div>`;
-      if (navigator.vibrate) navigator.vibrate(80);
-    } catch (e) {
-      const message = e && typeof e.message === "string" ? e.message : fmtDetail(e);
+
+      msg.className = "punch-result";
+      msg.innerHTML =
+        `<div class="success"><strong>${data.direction}</strong> · ` +
+        `${new Date(data.ts).toLocaleTimeString("en-IN")}<br/>` +
+        `${data.message}</div>`;
+
+      if (navigator.vibrate) {
+        navigator.vibrate(80);
+      }
+    } catch (error) {
+      const message =
+        error && typeof error.message === "string"
+          ? error.message
+          : fmtDetail(error);
+
       msg.textContent = message;
       msg.className = "punch-result error";
     } finally {
-      setTimeout(() => {
-        busy = false;
-      }, 2000);
+      // Do not automatically unlock after a timeout.
+      // An explicit user action is required to scan again.
+      scanAgainBtn.hidden = false;
+      scanAgainBtn.disabled = false;
+      stopBtn.disabled = true;
     }
   }
 
+  // Start the camera and select the rear camera when available.
   if (window.Html5Qrcode) {
     html5QrCode = new Html5Qrcode("reader");
+
     Html5Qrcode.getCameras()
-      .then((cameras) => {
-        const cam = cameras.find((c) => /back|rear|environment/i.test(c.label)) || cameras[0];
-        if (!cam) {
-          msg.textContent = "No camera found";
+      .then(async (cameras) => {
+        const camera =
+          cameras.find((item) =>
+            /back|rear|environment/i.test(item.label)
+          ) || cameras[0];
+
+        if (!camera) {
+          msg.textContent = "No camera found.";
           return;
         }
-        html5QrCode.start(
-          cam.id,
-          { fps: 8, qrbox: { width: 250, height: 250 } },
-          onScan,
-          () => {}
-        );
+
+        cameraId = camera.id;
+
+        try {
+          await startScanner();
+        } catch (error) {
+          msg.textContent = "Camera error: " + error;
+          scanAgainBtn.hidden = false;
+          scanAgainBtn.disabled = false;
+        }
       })
-      .catch((e) => {
-        msg.textContent = "Camera error: " + e;
+      .catch((error) => {
+        msg.textContent = "Camera error: " + error;
       });
   } else {
-    msg.textContent = "QR library failed to load";
+    msg.textContent = "QR library failed to load.";
   }
 
-  document.getElementById("stopScan").onclick = async () => {
-    if (html5QrCode) {
-      try {
-        await html5QrCode.stop();
-      } catch (_) {}
+  // Let the employee pause scanning manually.
+  stopBtn.onclick = async () => {
+    if (busy) {
+      return;
+    }
+
+    busy = true;
+
+    try {
+      await stopScanner();
+      msg.textContent =
+        "Scanning paused. Tap Scan again when ready.";
+    } catch (error) {
+      msg.textContent = "Could not stop camera: " + error;
+    } finally {
+      scanAgainBtn.hidden = false;
+      scanAgainBtn.disabled = false;
+      stopBtn.disabled = true;
+    }
+  };
+
+  // Only this button unlocks the next scan.
+  scanAgainBtn.onclick = async () => {
+    if (busy || scanActive) {
+      return;
+    }
+
+    scanAgainBtn.disabled = true;
+    scanAgainBtn.hidden = true;
+    busy = false;
+    msg.textContent = "Starting scanner…";
+
+    try {
+      await startScanner();
+    } catch (error) {
+      busy = true;
+      msg.textContent = "Camera error: " + error;
+      scanAgainBtn.hidden = false;
+      scanAgainBtn.disabled = false;
     }
   };
 }
