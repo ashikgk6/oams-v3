@@ -1,0 +1,17 @@
+{
+  "name": "OAMS Attendance",
+  "short_name": "OAMS",
+  "start_url": "/punch",
+  "display": "standalone",
+  "background_color": "#0f1419",
+  "theme_color": "#0f1419",
+  "description": "In-office attendance punch for OAMS",
+  "icons": [
+    {
+      "src": "/assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

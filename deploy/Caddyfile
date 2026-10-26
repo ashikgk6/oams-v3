@@ -1,0 +1,24 @@
+# Reverse proxy for OAMS (production).
+# OAMS_DOMAIN is injected from Compose (e.g. attendance.example.com).
+
+{$OAMS_DOMAIN} {
+	encode gzip
+
+	header {
+		# Defense in depth; API also sets overlapping headers.
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	reverse_proxy api:8000 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

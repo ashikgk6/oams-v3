@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: oams
+      POSTGRES_PASSWORD: oams_secret
+      POSTGRES_DB: oams
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oams -d oams"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://oams:oams_secret@db:5432/oams
+      SECRET_KEY: change-me-in-production-use-long-random-string
+      QR_HMAC_SECRET: change-me-qr-hmac-secret-key
+      INTERNAL_CRON_SECRET: change-me-cron-secret
+      APP_NAME: OAMS Office
+      ACCESS_TOKEN_EXPIRE_MINUTES: "480"
+      SEED_ADMIN_EMAIL: admin@office.local
+      SEED_ADMIN_PASSWORD: admin123
+      AUTO_CREATE_SCHEMA: "true"
+      RUN_SEED_ON_STARTUP: "true"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  pgdata:

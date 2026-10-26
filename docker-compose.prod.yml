@@ -1,0 +1,96 @@
+# Production stack: Postgres + migrate + API (unpublished) + Caddy (public HTTPS only).
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-oams}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-oams}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-oams} -d ${POSTGRES_DB:-oams}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    # No host ports — DB is reachable only on the Compose network.
+
+  migrate:
+    build: ./backend
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-oams}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-oams}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: alembic upgrade head
+    restart: "no"
+
+  api:
+    build: ./backend
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-oams}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-oams}
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
+      QR_HMAC_SECRET: ${QR_HMAC_SECRET:?set QR_HMAC_SECRET}
+      INTERNAL_CRON_SECRET: ${INTERNAL_CRON_SECRET:?set INTERNAL_CRON_SECRET}
+      APP_NAME: ${APP_NAME:-OAMS Office}
+      AUTO_CREATE_SCHEMA: "false"
+      RUN_SEED_ON_STARTUP: ${RUN_SEED_ON_STARTUP:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS to your public origin e.g. https://attendance.example.com}
+      ENABLE_DOCS: ${ENABLE_DOCS:-false}
+      STRICT_PRODUCTION: ${STRICT_PRODUCTION:-true}
+      SECURITY_HEADERS: ${SECURITY_HEADERS:-true}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+    expose:
+      - "8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --workers 2
+
+  worker:
+    build: ./backend
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-oams}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-oams}
+      SECRET_KEY: ${SECRET_KEY}
+      QR_HMAC_SECRET: ${QR_HMAC_SECRET}
+      INTERNAL_CRON_SECRET: ${INTERNAL_CRON_SECRET}
+      AUTO_CREATE_SCHEMA: "false"
+      RUN_SEED_ON_STARTUP: "false"
+      STRICT_PRODUCTION: "true"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    profiles: ["worker"]
+    command: python -m app.worker
+    restart: "no"
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    environment:
+      OAMS_DOMAIN: ${OAMS_DOMAIN:?set OAMS_DOMAIN e.g. attendance.example.com}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

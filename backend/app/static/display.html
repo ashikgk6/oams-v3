@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OAMS Wallboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #070b10;
+      --panel: #121a24;
+      --text: #f2f6fa;
+      --muted: #8fa0b3;
+      --in: #2dd4a0;
+      --late: #f0b429;
+      --leave: #5b9dff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(900px 500px at 0% 0%, #14352c 0%, transparent 55%),
+        radial-gradient(800px 400px at 100% 0%, #152640 0%, transparent 50%),
+        var(--bg);
+      color: var(--text);
+      font-family: "DM Sans", sans-serif;
+      padding: 1.5rem 2rem;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+    h1 {
+      font-family: "Fraunces", Georgia, serif;
+      font-size: clamp(2rem, 4vw, 3rem);
+      margin: 0;
+      letter-spacing: -0.02em;
+    }
+    .clock {
+      font-size: clamp(2rem, 5vw, 3.2rem);
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .counts {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .count {
+      background: var(--panel);
+      border-radius: 18px;
+      padding: 1.1rem 1.25rem;
+      border: 1px solid #243244;
+    }
+    .count .n { font-size: 2.6rem; font-weight: 700; font-family: "Fraunces", serif; line-height: 1; }
+    .count .l { color: var(--muted); margin-top: 0.35rem; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.8rem; }
+    .layout {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 1.25rem;
+      min-height: 55vh;
+    }
+    .panel {
+      background: color-mix(in srgb, var(--panel) 90%, transparent);
+      border: 1px solid #243244;
+      border-radius: 20px;
+      padding: 1.25rem 1.4rem;
+    }
+    .panel h2 {
+      margin: 0 0 1rem;
+      font-size: 1rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 600;
+    }
+    .list { display: grid; gap: 0.55rem; }
+    .person {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 1rem;
+      padding: 0.65rem 0.2rem;
+      border-bottom: 1px solid #1c2836;
+      font-size: clamp(1.05rem, 1.6vw, 1.35rem);
+      animation: fadeIn 0.35s ease;
+    }
+    .person .meta { color: var(--muted); font-size: 0.9em; }
+    .person .time { color: var(--in); font-variant-numeric: tabular-nums; font-weight: 600; }
+    .side .person .time { color: var(--late); }
+    .closed {
+      grid-column: 1 / -1;
+      text-align: center;
+      font-size: 2rem;
+      padding: 4rem;
+      color: var(--muted);
+      font-family: "Fraunces", serif;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    @media (max-width: 900px) {
+      .layout, .counts { grid-template-columns: 1fr; }
+      body { padding: 1rem; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1 id="office">OAMS</h1>
+      <div class="meta" id="dateLine" style="color:var(--muted)"></div>
+    </div>
+    <div class="clock" id="clock">--:--:--</div>
+  </header>
+  <div class="counts" id="counts"></div>
+  <div class="layout" id="layout"></div>
+  <script>
+    const token = location.pathname.split("/display/")[1] || "";
+
+    function render(data) {
+      document.getElementById("office").textContent = data.office_name;
+      document.getElementById("dateLine").textContent = `${data.date} · ${data.timezone}`;
+      document.getElementById("clock").textContent = data.clock;
+      const c = data.counts;
+      document.getElementById("counts").innerHTML = `
+        <div class="count"><div class="n" style="color:var(--in)">${c.in_now}</div><div class="l">In now</div></div>
+        <div class="count"><div class="n">${c.expected}</div><div class="l">Expected</div></div>
+        <div class="count"><div class="n" style="color:var(--leave)">${c.on_leave}</div><div class="l">On leave</div></div>
+        <div class="count"><div class="n" style="color:var(--late)">${c.late}</div><div class="l">Late</div></div>
+      `;
+      const layout = document.getElementById("layout");
+      if (data.closed_message) {
+        layout.innerHTML = `<div class="closed">${data.closed_message}</div>`;
+        return;
+      }
+      const people = (arr, showTime = true) =>
+        arr.length
+          ? arr
+              .map(
+                (p) => `<div class="person">
+              <div><strong>${p.name}</strong> <span class="meta">${p.team || ""}</span></div>
+              ${showTime && p.in_time ? `<div class="time">${p.in_time}</div>` : ""}
+            </div>`
+              )
+              .join("")
+          : `<p style="color:var(--muted)">Nobody yet</p>`;
+
+      layout.innerHTML = `
+        <div class="panel">
+          <h2>Currently in office</h2>
+          <div class="list">${people(data.in_now)}</div>
+        </div>
+        <div class="side">
+          <div class="panel" style="margin-bottom:1rem">
+            <h2>Late today</h2>
+            <div class="list">${people(data.late_today)}</div>
+          </div>
+          <div class="panel">
+            <h2>On leave</h2>
+            <div class="list">${people(data.on_leave, false)}</div>
+          </div>
+        </div>`;
+    }
+
+    async function tick() {
+      try {
+        const res = await fetch(`/api/display/${token}`);
+        if (!res.ok) throw new Error("bad token");
+        render(await res.json());
+      } catch (e) {
+        document.getElementById("layout").innerHTML =
+          `<div class="closed">Unable to load wallboard</div>`;
+      }
+    }
+    tick();
+    setInterval(tick, 12000);
+  </script>
+</body>
+</html>
