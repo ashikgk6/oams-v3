@@ -1,6 +1,6 @@
 self.addEventListener("install", (e) => {
   e.waitUntil(
-    caches.open("oams-v1").then((cache) =>
+    caches.open("oams-v2").then((cache) =>
       cache.addAll(["/", "/assets/styles.css", "/assets/app.js", "/assets/manifest.json"])
     )
   );

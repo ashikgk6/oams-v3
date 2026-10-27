@@ -1,3 +1,5 @@
+from pydantic import BaseModel, ConfigDict
+
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.application.identity_service import IdentityError
@@ -7,6 +9,13 @@ from app.models import User, UserRole
 from app.schemas import TeamCreate, TeamOut, UserCreate, UserOut
 
 router = APIRouter(prefix="/api", tags=["users"])
+
+
+class TeamUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    manager_id: int | None = None
 
 
 def _user_out(u: User) -> UserOut:
@@ -55,7 +64,12 @@ async def import_users_csv(
     admin: User = Depends(require_roles(UserRole.admin)),
     services: AppServices = Depends(get_services),
 ):
-    raw = (await file.read()).decode("utf-8-sig")
+    try:
+        raw = (await file.read()).decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=400, detail="CSV file must be UTF-8 encoded") from exc
+    finally:
+        await file.close()
     return services.identity.import_csv(admin, raw)
 
 
@@ -75,5 +89,25 @@ def create_team(
 ):
     try:
         return services.identity.create_team(admin, body.name, body.manager_id)
+    except IdentityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.patch("/teams/{team_id}", response_model=TeamOut)
+def update_team(
+    team_id: int,
+    body: TeamUpdate,
+    admin: User = Depends(require_roles(UserRole.admin)),
+    services: AppServices = Depends(get_services),
+):
+    changes = body.model_dump(exclude_unset=True)
+    try:
+        return services.identity.update_team(
+            admin,
+            team_id,
+            name=changes.get("name"),
+            manager_id=changes.get("manager_id"),
+            update_manager="manager_id" in changes,
+        )
     except IdentityError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc

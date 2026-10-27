@@ -59,6 +59,12 @@ function fmtDetail(err) {
   return "Request failed";
 }
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[char]);
+}
+
 function badge(status) {
   return `<span class="badge ${status}">${status.replace("_", " ")}</span>`;
 }
@@ -673,93 +679,325 @@ async function renderApprovals(app) {
 }
 
 async function renderAdmin(app) {
-  app.innerHTML = shell(`<div class="card">Loading…</div>`, "/admin");
+  if (localStorage.getItem("oams_role") !== "admin") {
+    app.innerHTML = shell('<div class="card"><h2>Admin access required</h2><p class="muted">Your account does not have permission to manage employees.</p></div>', "/admin");
+    bindLogout();
+    return;
+  }
+
+  app.innerHTML = shell('<div class="card"><p class="muted">Loading admin dashboard…</p></div>', "/admin");
   bindLogout();
-  const [settings, kiosks, tokens, holidays, teams] = await Promise.all([
-    api("/api/admin/settings"),
-    api("/api/kiosks"),
-    api("/api/display-tokens"),
-    api("/api/admin/holidays"),
-    api("/api/teams"),
-  ]);
+
+  let settings, kiosks, tokens, holidays, teams, users;
+  try {
+    [settings, kiosks, tokens, holidays, teams, users] = await Promise.all([
+      api("/api/admin/settings"),
+      api("/api/kiosks"),
+      api("/api/display-tokens"),
+      api("/api/admin/holidays"),
+      api("/api/teams"),
+      api("/api/users"),
+    ]);
+  } catch (error) {
+    app.innerHTML = shell(`<div class="card"><h2>Could not load admin dashboard</h2><p class="error">${escapeHtml(fmtDetail(error))}</p><p class="muted">Check that your account has admin permissions and try again.</p></div>`, "/admin");
+    bindLogout();
+    return;
+  }
+
   const now = new Date();
+  const managers = users.filter((u) => u.role === "manager");
+  const activeUsers = users.filter((u) => u.active);
+  const employeeCount = users.filter((u) => u.role === "employee").length;
+  const managerCount = managers.length;
+  const teamOptions = (selectedId = "") =>
+    `<option value="">No team</option>${teams.map((t) => `<option value="${t.id}" ${String(t.id) === String(selectedId) ? "selected" : ""}>${escapeHtml(t.name)}</option>`).join("")}`;
+  const managerOptions = (selectedId = "") =>
+    `<option value="">No manager assigned</option>${managers.map((u) => `<option value="${u.id}" ${String(u.id) === String(selectedId) ? "selected" : ""}>${escapeHtml(u.name)} (${escapeHtml(u.email)})</option>`).join("")}`;
+
   app.innerHTML = shell(
     `
+    <div class="admin-heading">
+      <div><p class="eyebrow">WORKSPACE MANAGEMENT</p><h1>Admin dashboard</h1><p class="muted">Manage employees, teams, office settings and attendance devices.</p></div>
+    </div>
+    <div class="grid stats admin-stats">
+      <div class="stat"><div class="n">${users.length}</div><div class="l">Total accounts</div></div>
+      <div class="stat"><div class="n">${activeUsers.length}</div><div class="l">Active accounts</div></div>
+      <div class="stat"><div class="n">${employeeCount}</div><div class="l">Employees</div></div>
+      <div class="stat"><div class="n">${managerCount}</div><div class="l">Managers</div></div>
+      <div class="stat"><div class="n">${teams.length}</div><div class="l">Teams</div></div>
+    </div>
+
+    <div class="card">
+      <div class="section-heading"><div><h2>Employees</h2><p class="muted">Search the directory and review each account's role and team.</p></div><span class="count-pill">${users.length} accounts</span></div>
+      <div class="field"><label for="userSearch">Search by name, email, role or team</label><input id="userSearch" type="search" placeholder="Start typing to filter employees…" /></div>
+      <div class="table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Team</th><th>Status</th></tr></thead><tbody id="userRows"></tbody></table></div>
+      <p id="userListMsg" class="muted"></p>
+    </div>
+
+    <div class="grid admin-two-col">
+      <div class="card">
+        <h2>Add employee or manager</h2>
+        <p class="muted">Create an account with a temporary password. Share credentials securely with the employee.</p>
+        <form id="createUserForm">
+          <div class="field"><label for="newUserName">Full name</label><input id="newUserName" name="name" required maxlength="160" autocomplete="name" /></div>
+          <div class="field"><label for="newUserEmail">Work email</label><input id="newUserEmail" name="email" type="email" required autocomplete="email" /></div>
+          <div class="field"><label for="newUserPassword">Initial password</label><input id="newUserPassword" name="password" type="password" required minlength="8" autocomplete="new-password" /></div>
+          <div class="field"><label for="newUserRole">Role</label><select id="newUserRole" name="role"><option value="employee">Employee</option><option value="manager">Manager</option><option value="admin">Admin</option></select></div>
+          <div class="field"><label for="newUserTeam">Team</label><select id="newUserTeam" name="team_id">${teamOptions()}</select></div>
+          <button id="createUserBtn" type="submit">Create account</button>
+          <p id="createUserMsg" class="muted" role="status"></p>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Create a team</h2>
+        <p class="muted">Choose an existing manager to assign ownership when the team is created.</p>
+        <form id="createTeamForm">
+          <div class="field"><label for="newTeamName">Team name</label><input id="newTeamName" name="name" required maxlength="120" placeholder="e.g. Engineering" /></div>
+          <div class="field"><label for="newTeamManager">Team manager</label><select id="newTeamManager" name="manager_id">${managerOptions()}</select></div>
+          <button id="createTeamBtn" type="submit">Create team</button>
+          <p id="createTeamMsg" class="muted" role="status"></p>
+        </form>
+        <h3>Current teams</h3>
+        <div class="table-wrap"><table><thead><tr><th>Team</th><th>Assigned manager</th><th>Members</th><th>Action</th></tr></thead><tbody id="teamRows"></tbody></table></div>
+        <p class="muted">Select a manager and choose Save to change the assignment. Select “No manager assigned” to clear it.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Import employees from CSV</h2>
+      <p class="muted">CSV headers: <code>name,email,role,team,password</code>. Use a unique password per account and distribute credentials securely. Roles: employee, manager or admin.</p>
+      <div class="field"><label for="csvFile">CSV file</label><input type="file" id="csvFile" accept=".csv,text/csv" /></div>
+      <button id="importCsv" type="button">Import CSV</button>
+      <p id="importMsg" class="muted" role="status"></p>
+      <pre id="importOut" class="import-output" hidden></pre>
+    </div>
+
     <div class="card">
       <h2>Office settings (IST)</h2>
-      <div class="field"><label>Office name</label><input id="officeName" value="${settings.office_name}" /></div>
+      <div class="field"><label for="officeName">Office name</label><input id="officeName" value="${escapeHtml(settings.office_name)}" /></div>
       <div class="row">
-        <div class="field" style="flex:1"><label>Shift start</label><input id="shiftStart" type="time" value="${settings.shift_start.slice(0, 5)}" /></div>
-        <div class="field" style="flex:1"><label>Shift end</label><input id="shiftEnd" type="time" value="${settings.shift_end.slice(0, 5)}" /></div>
-        <div class="field" style="flex:1"><label>Grace (min)</label><input id="grace" type="number" value="${settings.grace_minutes}" /></div>
+        <div class="field" style="flex:1"><label for="shiftStart">Shift start</label><input id="shiftStart" type="time" value="${escapeHtml(settings.shift_start.slice(0, 5))}" /></div>
+        <div class="field" style="flex:1"><label for="shiftEnd">Shift end</label><input id="shiftEnd" type="time" value="${escapeHtml(settings.shift_end.slice(0, 5))}" /></div>
+        <div class="field" style="flex:1"><label for="grace">Grace (min)</label><input id="grace" type="number" min="0" value="${settings.grace_minutes}" /></div>
       </div>
-      <button id="saveSettings">Save settings</button>
-      <p id="setMsg" class="muted"></p>
+      <button id="saveSettings">Save settings</button><p id="setMsg" class="muted" role="status"></p>
     </div>
-    <div class="card">
-      <h2>Import employees (CSV)</h2>
-      <p class="muted">Columns: name,email,role,team,password</p>
-      <input type="file" id="csvFile" accept=".csv" />
-      <button id="importCsv" style="margin-top:0.75rem">Import</button>
-      <pre id="importOut" class="muted"></pre>
-    </div>
-    <div class="card">
-      <h2>Door kiosks</h2>
-      <div class="row">
-        <input id="kioskName" placeholder="Lobby tablet" style="max-width:240px" />
-        <button id="createKiosk">Create kiosk</button>
+
+    <div class="grid admin-two-col">
+      <div class="card">
+        <h2>Door kiosks</h2>
+        <div class="row"><input id="kioskName" placeholder="Lobby tablet" style="max-width:240px" /><button id="createKiosk">Create kiosk</button></div>
+        <div class="table-wrap"><table style="margin-top:1rem"><thead><tr><th>Name</th><th>Pair code</th><th>Paired</th></tr></thead><tbody>
+        ${kiosks.map((k) => `<tr><td>${escapeHtml(k.name)}</td><td><code>${escapeHtml(k.pair_code || "—")}</code></td><td>${k.paired_at ? "Yes" : "No"}</td></tr>`).join("")}
+        </tbody></table></div>
+        <p class="muted">On the tablet open <a href="/kiosk/pair">/kiosk/pair</a> and enter the pair code.</p>
       </div>
-      <table style="margin-top:1rem"><thead><tr><th>Name</th><th>Pair code</th><th>Paired</th></tr></thead>
-      <tbody>
-      ${kiosks
-        .map(
-          (k) =>
-            `<tr><td>${k.name}</td><td><code>${k.pair_code || "—"}</code></td><td>${k.paired_at ? "Yes" : "No"}</td></tr>`
-        )
-        .join("")}
-      </tbody></table>
-      <p class="muted">On the tablet open <a href="/kiosk/pair">/kiosk/pair</a> and enter the pair code.</p>
-    </div>
-    <div class="card">
-      <h2>TV display tokens</h2>
-      <div class="row">
-        <input id="tvLabel" value="Reception TV" style="max-width:240px" />
-        <button id="createTv">Create display URL</button>
+      <div class="card">
+        <h2>TV display tokens</h2>
+        <div class="row"><input id="tvLabel" value="Reception TV" style="max-width:240px" /><button id="createTv">Create display URL</button></div>
+        <p id="tvOut" class="success"></p>
+        <div class="table-wrap"><table style="margin-top:1rem"><thead><tr><th>Label</th><th>Prefix</th><th>Revoked</th></tr></thead><tbody>
+        ${tokens.map((t) => `<tr><td>${escapeHtml(t.label)}</td><td><code>${escapeHtml(t.token_prefix)}…</code></td><td>${t.revoked_at ? "Yes" : "No"}</td></tr>`).join("")}
+        </tbody></table></div>
       </div>
-      <p id="tvOut" class="success"></p>
-      <table style="margin-top:1rem"><thead><tr><th>Label</th><th>Prefix</th><th>Revoked</th></tr></thead>
-      <tbody>
-      ${tokens
-        .map(
-          (t) =>
-            `<tr><td>${t.label}</td><td>${t.token_prefix}…</td><td>${t.revoked_at ? "Yes" : "No"}</td></tr>`
-        )
-        .join("")}
-      </tbody></table>
     </div>
-    <div class="card">
-      <h2>Holidays</h2>
-      <div class="row">
-        <input type="date" id="hDate" />
-        <input id="hName" placeholder="Name" />
-        <button id="addHoliday">Add</button>
+
+    <div class="grid admin-two-col">
+      <div class="card">
+        <h2>Holidays</h2>
+        <div class="row"><input type="date" id="hDate" /><input id="hName" placeholder="Holiday name" /><button id="addHoliday">Add holiday</button></div>
+        <ul>${holidays.map((h) => `<li>${escapeHtml(h.date)} — ${escapeHtml(h.name)}</li>`).join("")}</ul>
+        <p id="holidayMsg" class="muted" role="status"></p>
       </div>
-      <ul>${holidays.map((h) => `<li>${h.date} — ${h.name}</li>`).join("")}</ul>
-    </div>
-    <div class="card">
-      <h2>Monthly CSV</h2>
-      <div class="row">
-        <input type="number" id="y" value="${now.getFullYear()}" style="max-width:100px" />
-        <input type="number" id="m" value="${now.getMonth() + 1}" min="1" max="12" style="max-width:80px" />
-        <button id="dlCsv">Download</button>
+      <div class="card">
+        <h2>Monthly attendance CSV</h2>
+        <div class="row"><input type="number" id="y" value="${now.getFullYear()}" style="max-width:120px" /><input type="number" id="m" value="${now.getMonth() + 1}" min="1" max="12" style="max-width:90px" /><button id="dlCsv">Download report</button></div>
+        <p id="reportMsg" class="muted" role="status"></p>
       </div>
-      <p class="muted">Teams: ${teams.map((t) => t.name).join(", ")}</p>
     </div>`,
     "/admin"
   );
   bindLogout();
 
+  function renderUserRows(query = "") {
+    const q = query.trim().toLowerCase();
+    const filtered = users.filter((u) =>
+      [u.name, u.email, u.role, u.team_name || ""].some((v) => String(v).toLowerCase().includes(q))
+    );
+    const rows = document.getElementById("userRows");
+    const msg = document.getElementById("userListMsg");
+    if (!filtered.length) {
+      rows.innerHTML = '<tr><td colspan="5" class="muted">No matching accounts.</td></tr>';
+    } else {
+      rows.innerHTML = filtered.map((u) => `<tr>
+        <td>${escapeHtml(u.name)}</td><td>${escapeHtml(u.email)}</td>
+        <td><span class="role-pill role-${escapeHtml(u.role)}">${escapeHtml(u.role)}</span></td>
+        <td>${escapeHtml(u.team_name || "—")}</td>
+        <td><span class="status-pill ${u.active ? "is-active" : "is-inactive"}">${u.active ? "Active" : "Inactive"}</span></td>
+      </tr>`).join("");
+    }
+    msg.textContent = `Showing ${filtered.length} of ${users.length} accounts.`;
+  }
+
+  function renderTeamRows() {
+    const rows = document.getElementById("teamRows");
+    rows.innerHTML = teams.length ? teams.map((team) => {
+      const count = users.filter((u) => u.team_id === team.id).length;
+      return `<tr>
+        <td>${escapeHtml(team.name)}</td>
+        <td><select aria-label="Manager for ${escapeHtml(team.name)}" data-team-manager="${team.id}">${managerOptions(team.manager_id)}</select></td>
+        <td>${count}</td>
+        <td><button type="button" data-save-team="${team.id}">Save</button></td>
+      </tr>`;
+    }).join("") : '<tr><td colspan="4" class="muted">No teams created yet.</td></tr>';
+  }
+
+  renderUserRows();
+  renderTeamRows();
+  document.getElementById("userSearch").addEventListener("input", (event) => renderUserRows(event.target.value));
+
+  document.getElementById("teamRows").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-save-team]");
+    if (!button) return;
+    const teamId = Number(button.dataset.saveTeam);
+    const select = document.querySelector(`[data-team-manager="${teamId}"]`);
+    const message = document.getElementById("createTeamMsg");
+    button.disabled = true;
+    message.textContent = "Updating team manager…";
+    message.className = "muted";
+    try {
+      const managerValue = select.value;
+      const updated = await api(`/api/teams/${teamId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ manager_id: managerValue ? Number(managerValue) : null }),
+      });
+      teams = teams.map((team) => team.id === updated.id ? updated : team);
+      renderTeamRows();
+      message.textContent = `Manager assignment saved for "${updated.name}".`;
+      message.className = "success";
+    } catch (error) {
+      message.textContent = fmtDetail(error);
+      message.className = "error";
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  document.getElementById("createUserForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = document.getElementById("createUserBtn");
+    const message = document.getElementById("createUserMsg");
+    button.disabled = true;
+    message.textContent = "Creating account…";
+    try {
+      const teamValue = document.getElementById("newUserTeam").value;
+      const created = await api("/api/users", {
+        method: "POST",
+        body: JSON.stringify({
+          name: document.getElementById("newUserName").value.trim(),
+          email: document.getElementById("newUserEmail").value.trim(),
+          password: document.getElementById("newUserPassword").value,
+          role: document.getElementById("newUserRole").value,
+          team_id: teamValue ? Number(teamValue) : null,
+        }),
+      });
+      users.push(created);
+      if (created.role === "manager") {
+        const managerSelect = document.getElementById("newTeamManager");
+        managerSelect.insertAdjacentHTML("beforeend", `<option value="${created.id}">${escapeHtml(created.name)} (${escapeHtml(created.email)})</option>`);
+      }
+      document.getElementById("createUserForm").reset();
+      renderUserRows(document.getElementById("userSearch").value);
+      renderTeamRows();
+      document.getElementById("newUserTeam").value = "";
+      message.textContent = `Account created for ${created.name}.`;
+      message.className = "success";
+    } catch (error) {
+      message.textContent = fmtDetail(error);
+      message.className = "error";
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  document.getElementById("createTeamForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = document.getElementById("createTeamBtn");
+    const message = document.getElementById("createTeamMsg");
+    button.disabled = true;
+    message.textContent = "Creating team…";
+    try {
+      const managerValue = document.getElementById("newTeamManager").value;
+      const team = await api("/api/teams", {
+        method: "POST",
+        body: JSON.stringify({
+          name: document.getElementById("newTeamName").value.trim(),
+          manager_id: managerValue ? Number(managerValue) : null,
+        }),
+      });
+      teams.push(team);
+      document.getElementById("createTeamForm").reset();
+      document.getElementById("newUserTeam").insertAdjacentHTML("beforeend", `<option value="${team.id}">${escapeHtml(team.name)}</option>`);
+      renderTeamRows();
+      message.textContent = `Team "${team.name}" created.`;
+      message.className = "success";
+    } catch (error) {
+      message.textContent = fmtDetail(error);
+      message.className = "error";
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  document.getElementById("importCsv").onclick = async () => {
+    const fileInput = document.getElementById("csvFile");
+    const message = document.getElementById("importMsg");
+    const output = document.getElementById("importOut");
+    const file = fileInput.files[0];
+    if (!file) {
+      message.textContent = "Choose a CSV file first.";
+      message.className = "error";
+      return;
+    }
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      message.textContent = "Please select a .csv file.";
+      message.className = "error";
+      return;
+    }
+    const formData = new FormData();
+    formData.append("file", file);
+    const button = document.getElementById("importCsv");
+    button.disabled = true;
+    message.textContent = "Importing accounts…";
+    message.className = "muted";
+    output.hidden = true;
+    try {
+      const result = await api("/api/users/import-csv", { method: "POST", body: formData });
+      output.textContent = JSON.stringify(result, null, 2);
+      output.hidden = false;
+      const createdCount = Array.isArray(result.created) ? result.created.length : 0;
+      const skippedCount = Array.isArray(result.skipped) ? result.skipped.length : 0;
+      const errorCount = Array.isArray(result.errors) ? result.errors.length : 0;
+      message.textContent = `Import finished: ${createdCount} created, ${skippedCount} skipped, ${errorCount} errors.`;
+      message.className = errorCount ? "error" : "success";
+      const refreshedUsers = await api("/api/users");
+      users = refreshedUsers;
+      const refreshedTeams = await api("/api/teams");
+      teams = refreshedTeams;
+      renderUserRows(document.getElementById("userSearch").value);
+      renderTeamRows();
+      document.getElementById("newUserTeam").innerHTML = teamOptions();
+      document.getElementById("newTeamManager").innerHTML = managerOptions();
+    } catch (error) {
+      message.textContent = fmtDetail(error);
+      message.className = "error";
+    } finally {
+      button.disabled = false;
+    }
+  };
+
   document.getElementById("saveSettings").onclick = async () => {
+    const message = document.getElementById("setMsg");
     try {
       await api("/api/admin/settings", {
         method: "PATCH",
@@ -770,65 +1008,72 @@ async function renderAdmin(app) {
           grace_minutes: Number(document.getElementById("grace").value),
         }),
       });
-      document.getElementById("setMsg").textContent = "Saved";
-    } catch (e) {
-      document.getElementById("setMsg").textContent = fmtDetail(e);
+      message.textContent = "Settings saved.";
+      message.className = "success";
+    } catch (error) {
+      message.textContent = fmtDetail(error);
+      message.className = "error";
     }
   };
 
-  document.getElementById("importCsv").onclick = async () => {
-    const f = document.getElementById("csvFile").files[0];
-    if (!f) return;
-    const fd = new FormData();
-    fd.append("file", f);
-    const res = await fetch("/api/users/import-csv", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token()}` },
-      body: fd,
-    });
-    const data = await res.json();
-    document.getElementById("importOut").textContent = JSON.stringify(data, null, 2);
-  };
-
   document.getElementById("createKiosk").onclick = async () => {
-    await api("/api/kiosks", {
-      method: "POST",
-      body: JSON.stringify({ name: document.getElementById("kioskName").value || "Door Kiosk" }),
-    });
-    renderAdmin(app);
+    try {
+      await api("/api/kiosks", { method: "POST", body: JSON.stringify({ name: document.getElementById("kioskName").value || "Door Kiosk" }) });
+      await renderAdmin(app);
+    } catch (error) {
+      alert(fmtDetail(error));
+    }
   };
 
   document.getElementById("createTv").onclick = async () => {
-    const data = await api("/api/display-tokens", {
-      method: "POST",
-      body: JSON.stringify({ label: document.getElementById("tvLabel").value || "Reception TV" }),
-    });
-    const url = location.origin + data.display_path;
-    document.getElementById("tvOut").innerHTML = `Open on TV: <a href="${url}" target="_blank">${url}</a> (copy now — shown once)`;
+    try {
+      const data = await api("/api/display-tokens", { method: "POST", body: JSON.stringify({ label: document.getElementById("tvLabel").value || "Reception TV" }) });
+      const url = location.origin + data.display_path;
+      document.getElementById("tvOut").innerHTML = `Open on TV: <a href="${url}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a> (copy now — shown once)`;
+    } catch (error) {
+      document.getElementById("tvOut").textContent = fmtDetail(error);
+      document.getElementById("tvOut").className = "error";
+    }
   };
 
   document.getElementById("addHoliday").onclick = async () => {
-    await api("/api/admin/holidays", {
-      method: "POST",
-      body: JSON.stringify({
-        date: document.getElementById("hDate").value,
-        name: document.getElementById("hName").value,
-      }),
-    });
-    renderAdmin(app);
+    const message = document.getElementById("holidayMsg");
+    try {
+      await api("/api/admin/holidays", { method: "POST", body: JSON.stringify({ date: document.getElementById("hDate").value, name: document.getElementById("hName").value.trim() }) });
+      message.textContent = "Holiday added.";
+      message.className = "success";
+      await renderAdmin(app);
+    } catch (error) {
+      message.textContent = fmtDetail(error);
+      message.className = "error";
+    }
   };
 
   document.getElementById("dlCsv").onclick = async () => {
-    const y = document.getElementById("y").value;
-    const m = document.getElementById("m").value;
-    const res = await fetch(`/api/reports/monthly.csv?year=${y}&month=${m}`, {
-      headers: { Authorization: `Bearer ${token()}` },
-    });
-    const blob = await res.blob();
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `attendance_${y}_${m}.csv`;
-    a.click();
+    const year = document.getElementById("y").value;
+    const month = document.getElementById("m").value;
+    const message = document.getElementById("reportMsg");
+    if (!year || Number(month) < 1 || Number(month) > 12) {
+      message.textContent = "Enter a valid year and month.";
+      message.className = "error";
+      return;
+    }
+    try {
+      const response = await fetch(`/api/reports/monthly.csv?year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`, { headers: authHeaders(false) });
+      if (!response.ok) throw new Error(await response.text());
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `attendance_${year}_${month}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+      message.textContent = "Report downloaded.";
+      message.className = "success";
+    } catch (error) {
+      message.textContent = fmtDetail(error);
+      message.className = "error";
+    }
   };
 }
 
