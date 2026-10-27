@@ -24,9 +24,9 @@ class Settings(BaseSettings):
     qr_ttl_seconds: int = 25
     duplicate_punch_minutes: int = 2
     # Dummy office coordinates for development only; replace before deployment.
-    office_latitude: float = 14.143940
-    office_longitude: float = 74.983604
-    office_geofence_radius_meters: float = 200.0
+    office_latitude: float = 12.924913
+    office_longitude: float = 77.551212
+    office_geofence_radius_meters: float = 100.0
     max_location_accuracy_meters: float = 50.0
     auto_create_schema: bool = True
     run_seed_on_startup: bool = True
