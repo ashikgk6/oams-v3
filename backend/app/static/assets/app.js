@@ -127,37 +127,105 @@ function bindLogout() {
 
 function renderLogin(app) {
   app.innerHTML = `
-  <div class="login-wrap">
-    <div class="card login-card">
-      <h1>Employee Attendance Portal</h1>
-      <p class="muted">Sign in to manage your attendance and access your workplace dashboard.</p>
-      <div class="field"><label>Email</label><input id="email" type="email" value="admin@office.local" /></div>
-      <div class="field"><label>Password</label><input id="password" type="password" value="admin123" /></div>
-      <p class="error hidden" id="err"></p>
-      <button id="loginBtn" style="width:100%">Sign in</button>
-      <p class="muted" style="margin-top:1rem;font-size:0.85rem">
-        Authorized employees only. Your attendance is recorded securely.
-      </p>
-    </div>
-  </div>`;
-  document.getElementById("loginBtn").onclick = async () => {
-    const err = document.getElementById("err");
+    <div class="login-wrap">
+      <div class="card login-card">
+        <h1>Employee Attendance Portal</h1>
+        <p class="muted">
+          Sign in with your work credentials to access your attendance
+          dashboard and workplace services.
+        </p>
+
+        <div class="field">
+          <label for="email">Work email</label>
+          <input
+            id="email"
+            type="email"
+            placeholder="Enter your work email address"
+            autocomplete="username"
+            required
+          />
+        </div>
+
+        <div class="field">
+          <label for="password">Password</label>
+          <input
+            id="password"
+            type="password"
+            placeholder="Enter your password"
+            autocomplete="current-password"
+            required
+          />
+        </div>
+
+        <p class="error hidden" id="err" role="alert"></p>
+
+        <button id="loginBtn" type="button" style="width:100%">
+          Sign in
+        </button>
+
+        <p class="muted" style="margin-top:1rem;font-size:0.85rem">
+          For authorized employees only. Please use your registered
+          work account to sign in.
+        </p>
+      </div>
+    </div>`;
+
+  const emailInput = document.getElementById("email");
+  const passwordInput = document.getElementById("password");
+  const loginBtn = document.getElementById("loginBtn");
+  const err = document.getElementById("err");
+
+  async function handleLogin() {
+    if (loginBtn.disabled) {
+      return;
+    }
+
     err.classList.add("hidden");
+    err.textContent = "";
+
+    const email = emailInput.value.trim();
+    const password = passwordInput.value;
+
+    if (!email || !password) {
+      err.textContent = "Please enter your work email and password.";
+      err.classList.remove("hidden");
+      return;
+    }
+
+    loginBtn.disabled = true;
+    loginBtn.textContent = "Signing in…";
+
     try {
       const data = await api("/api/auth/login", {
         method: "POST",
         body: JSON.stringify({
-          email: document.getElementById("email").value,
-          password: document.getElementById("password").value,
+          email,
+          password,
         }),
       });
+
       setAuth(data);
       location.href = "/dashboard";
     } catch (e) {
-      err.textContent = fmtDetail(e);
+      err.textContent =
+        "We couldn't sign you in. Check your email and password, then try again.";
       err.classList.remove("hidden");
+    } finally {
+      loginBtn.disabled = false;
+      loginBtn.textContent = "Sign in";
     }
-  };
+  }
+
+  loginBtn.onclick = handleLogin;
+
+  // Allow employees to submit the form using the Enter key.
+  [emailInput, passwordInput].forEach((input) => {
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        handleLogin();
+      }
+    });
+  });
 }
 
 async function renderDashboard(app) {
