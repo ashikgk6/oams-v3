@@ -99,7 +99,7 @@ function shell(content, active) {
   return `
   <div class="shell">
     <div class="topbar">
-      <div class="brand">OAMS</div>
+      <div class="brand">Employee Attendance Portal</div>
       <nav class="nav">
         ${links
           .filter(([, , show]) => show)
@@ -129,14 +129,14 @@ function renderLogin(app) {
   app.innerHTML = `
   <div class="login-wrap">
     <div class="card login-card">
-      <h1>OAMS</h1>
-      <p class="muted">In-office attendance for your Indian office</p>
+      <h1>Employee Attendance Portal</h1>
+      <p class="muted">Sign in to manage your attendance and access your workplace dashboard.</p>
       <div class="field"><label>Email</label><input id="email" type="email" value="admin@office.local" /></div>
       <div class="field"><label>Password</label><input id="password" type="password" value="admin123" /></div>
       <p class="error hidden" id="err"></p>
       <button id="loginBtn" style="width:100%">Sign in</button>
       <p class="muted" style="margin-top:1rem;font-size:0.85rem">
-        Demo: admin@office.local / admin123 · manager@office.local / manager123 · employee@office.local / employee123
+        Authorized employees only. Your attendance is recorded securely.
       </p>
     </div>
   </div>`;
